@@ -38,11 +38,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.hindipredicter.DrawingView
 import com.example.hindipredicter.viewmodel.CharacterViewModel
 import com.example.hindipredicter.R
-import com.example.hindipredicter.ai.getProcessedFeaturesForCharacter // NEW: Corrected import and function name
+import com.example.hindipredicter.ai.getProcessedFeaturesForCharacter // Corrected import and function name
+import android.graphics.RectF // Import RectF
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-    fun BrushBottomSheet(
+fun BrushBottomSheet(
     onDismiss: () -> Unit,
     drawingView: DrawingView?,
     colors: List<Color>,
@@ -59,10 +60,13 @@ import com.example.hindipredicter.ai.getProcessedFeaturesForCharacter // NEW: Co
 ) {
     val context = LocalContext.current
 
-    // NEW: Observe the prediction result from the ViewModel (now a list of strings)
+    // Observe the prediction result from the ViewModel (now a list of strings)
     val predictionResults = characterViewModel.predictionResult.value
 
-    // Use LaunchedEffect to react to changes in predictionResults
+    // NEW: Observe prediction result for single character from square
+    val singleCharPrediction = characterViewModel.singleCharPredictionResult.value
+
+    // Use LaunchedEffect to react to changes in predictionResults (for multi-char prediction)
     LaunchedEffect(predictionResults) {
         predictionResults?.let { results ->
             if (results.isNotEmpty()) {
@@ -72,6 +76,22 @@ import com.example.hindipredicter.ai.getProcessedFeaturesForCharacter // NEW: Co
             }
         }
     }
+
+    // NEW: LaunchedEffect for single character prediction from square
+    LaunchedEffect(singleCharPrediction) {
+        singleCharPrediction?.let { (rect, predictedChar) ->
+            drawingView?.updatePredictedCharacter(rect, predictedChar)
+            characterViewModel.clearSingleCharPrediction()
+        }
+    }
+
+    // NEW: Set up the callback in DrawingView
+    LaunchedEffect(drawingView, characterViewModel) {
+        drawingView?.onPredictCharacterInSquare = { rect, features ->
+            characterViewModel.predictSingleCharacterForSquare(rect, features)
+        }
+    }
+
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -147,7 +167,7 @@ import com.example.hindipredicter.ai.getProcessedFeaturesForCharacter // NEW: Co
             }
             // End of NO CHANGES section
 
-            // Bottom bar with buttons like Undo, Redo, Clear, Share, AI prediction
+            // Bottom bar with buttons like Undo, Redo, Clear, Share, AI prediction, and NEW Square Mode button
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -199,25 +219,25 @@ import com.example.hindipredicter.ai.getProcessedFeaturesForCharacter // NEW: Co
                         modifier = Modifier.size(32.dp)
                     )
                 }
-                // AI prediction button - MODIFIED
+                // AI prediction button (for multi-character prediction based on time gaps)
                 IconButton(onClick = {
                     drawingView?.let { view ->
+                        // Ensure we are in FREEHAND mode when doing a "Predict All"
+                        view.setDrawingMode(DrawingView.DrawingMode.FREEHAND)
+
                         val segmentedCharacters = view.getSegmentedCharactersCoordinates()
                         if (segmentedCharacters.isNotEmpty()) {
                             val allFeaturesForPrediction = mutableListOf<List<Double>>()
 
                             for (charCoordinates in segmentedCharacters) {
                                 if (charCoordinates.isNotEmpty()) {
-                                    // Use the refactored function from utils.kt
                                     val features = getProcessedFeaturesForCharacter(charCoordinates)
                                     Log.d("ProcessedFeatures", "Extracted Features for one char: $features")
 
-                                    // Verify features size matches model input expectation (218 in your case)
-                                    if (features.size == 218) {
+                                    if (features.size == 218) { // Your expected feature size
                                         allFeaturesForPrediction.add(features)
                                     } else {
                                         Log.e("BrushBottomSheet", "Features list for char is incorrect size: ${features.size}. Expected 218.")
-                                        // You might choose to add a placeholder or error for this character, e.g., allPredictedChars.add("Error")
                                     }
                                 }
                             }
@@ -235,7 +255,31 @@ import com.example.hindipredicter.ai.getProcessedFeaturesForCharacter // NEW: Co
                 }) {
                     Icon(
                         painter = painterResource(R.drawable.ai),
-                        contentDescription = "Predict Characters", // Changed content description
+                        contentDescription = "Predict Characters (Time-based)",
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+
+                // NEW: Button to switch to Square Drawing Mode
+                IconButton(onClick = {
+                    drawingView?.setDrawingMode(DrawingView.DrawingMode.SQUARE)
+                }) {
+                    Icon(
+                        painter = painterResource(R.drawable.square_icon), // You'll need to add this drawable
+                        contentDescription = "Draw Square for Prediction",
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+
+                // NEW: Button to switch back to Freehand Drawing Mode
+                IconButton(onClick = {
+                    drawingView?.setDrawingMode(DrawingView.DrawingMode.FREEHAND)
+                }) {
+                    Icon(
+                        painter = painterResource(R.drawable.freehand_icon), // You'll need to add this drawable
+                        contentDescription = "Draw Freehand",
                         tint = Color.Unspecified,
                         modifier = Modifier.size(32.dp)
                     )

@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF // Import RectF for drawing rectangles
 import android.net.Uri
 import android.os.Environment
 import android.util.AttributeSet
@@ -20,6 +21,7 @@ import java.io.File
 import java.io.FileOutputStream
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.toColorInt
+import com.example.hindipredicter.ai.getProcessedFeaturesForCharacter // Required for predictCharacterInSquare
 
 class DrawingView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private var mDrawPath: CustomPath? = null
@@ -40,12 +42,33 @@ class DrawingView(context: Context, attrs: AttributeSet?) : View(context, attrs)
     // Temporary list to accumulate coordinates for the character currently being drawn.
     private var currentCharacterCoordinates = mutableListOf<Triple<Int, Int, Int>>()
 
-    // NEW: Timestamp of the last ACTION_UP event
+    // Timestamp of the last ACTION_UP event
     private var lastActionUpTime: Long = 0L
 
     // NOTE: The 'allCoordinates' variable here might become redundant for prediction purposes
     // since we are now segmenting characters. Keep it if it's used elsewhere for full canvas data.
     private val allCoordinates = mutableListOf<List<Triple<Int, Int, Int>>>()
+
+    // NEW: Drawing Mode
+    enum class DrawingMode { FREEHAND, SQUARE }
+    private var currentDrawingMode: DrawingMode = DrawingMode.FREEHAND
+
+    // NEW: Variables for Square Drawing
+    private var currentSquare: RectF? = null
+    private var startSquareX: Float = 0f
+    private var startSquareY: Float = 0f
+
+    // NEW: List to store drawn squares and their predictions
+    data class PredictedSquare(val rect: RectF, var predictedChar: String? = null)
+    private val mPredictedSquares = mutableListOf<PredictedSquare>()
+
+    // NEW: Paint for drawing squares
+    private var mSquarePaint: Paint? = null
+    private var mTextPaint: Paint? = null // For drawing predicted text
+
+    // NEW: Callback for prediction
+    var onPredictCharacterInSquare: ((RectF, List<Double>) -> Unit)? = null
+
 
     init {
         setUpDrawing()
@@ -65,6 +88,8 @@ class DrawingView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         mSegmentedCharactersCoordinates.clear() // Clear segmented characters
         currentCharacterCoordinates.clear() // Clear current character buffer
         lastActionUpTime = 0L // Reset the timestamp on clear
+        mPredictedSquares.clear() // NEW: Clear drawn squares
+        currentSquare = null // NEW: Clear current square in progress
         updateAllCoordinates() // Update after clear
         invalidate()
     }
@@ -77,6 +102,21 @@ class DrawingView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         mDrawPaint!!.strokeJoin = Paint.Join.ROUND
         mDrawPaint!!.strokeCap = Paint.Cap.ROUND
         mCanvasPaint = Paint(Paint.DITHER_FLAG)
+
+        // NEW: Setup for square drawing paint
+        mSquarePaint = Paint().apply {
+            color = Color.BLUE // Default square color
+            style = Paint.Style.STROKE
+            strokeWidth = 5f // Square line thickness
+        }
+
+        // NEW: Setup for text paint
+        mTextPaint = Paint().apply {
+            color = Color.RED // Default text color
+            textSize = 30f // Text size
+            isAntiAlias = true
+            textAlign = Paint.Align.LEFT
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -97,6 +137,20 @@ class DrawingView(context: Context, attrs: AttributeSet?) : View(context, attrs)
             mDrawPaint!!.strokeWidth = mDrawPath!!.brushThickness
             mDrawPaint!!.color = mDrawPaint!!.color
             canvas.drawPath(mDrawPath!!, mDrawPaint!!)
+        }
+
+        // NEW: Draw any squares that have been finalized
+        for (predictedSquare in mPredictedSquares) {
+            canvas.drawRect(predictedSquare.rect, mSquarePaint!!)
+            predictedSquare.predictedChar?.let { char ->
+                // Draw text slightly above and to the right of the top-right corner
+                canvas.drawText(char, predictedSquare.rect.right, predictedSquare.rect.top - 10, mTextPaint!!)
+            }
+        }
+
+        // NEW: Draw the current square being drawn (if any)
+        currentSquare?.let {
+            canvas.drawRect(it, mSquarePaint!!)
         }
     }
 
@@ -131,55 +185,84 @@ class DrawingView(context: Context, attrs: AttributeSet?) : View(context, attrs)
     }
 
     override fun onTouchEvent(event: MotionEvent?): Boolean {
-        val touchX = event?.x?.toInt() ?: return false
-        val touchY = event.y.toInt()
+        val touchX = event?.x ?: return false
+        val touchY = event.y
 
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                val currentTime = System.currentTimeMillis()
-                val timeSinceLastUp = currentTime - lastActionUpTime
-                val NEW_CHARACTER_THRESHOLD = 3000L // 3 seconds
+                when (currentDrawingMode) {
+                    DrawingMode.FREEHAND -> {
+                        val currentTime = System.currentTimeMillis()
+                        val timeSinceLastUp = currentTime - lastActionUpTime
+                        val NEW_CHARACTER_THRESHOLD = 3000L // 3 seconds
 
-                Log.d("DrawingView", "ACTION_DOWN: currentCharacterCoordinates size = ${currentCharacterCoordinates.size}, timeSinceLastUp = $timeSinceLastUp ms")
+                        Log.d("DrawingView", "ACTION_DOWN (FREEHAND): currentCharacterCoordinates size = ${currentCharacterCoordinates.size}, timeSinceLastUp = $timeSinceLastUp ms")
 
-                // Condition for starting a new character:
-                // 1. There are existing points in currentCharacterCoordinates (meaning a stroke was just completed)
-                // 2. AND the time since the last ACTION_UP is greater than the threshold (3 seconds).
-                // OR if it's the very first stroke on a fresh canvas, it's always a new character.
-                if (currentCharacterCoordinates.isNotEmpty() && timeSinceLastUp > NEW_CHARACTER_THRESHOLD) {
-                    mSegmentedCharactersCoordinates.add(currentCharacterCoordinates) // Add the completed character
-                    currentCharacterCoordinates = mutableListOf() // Start new character buffer
-                    Log.d("DrawingView", "New character started after a ${timeSinceLastUp}ms gap.")
+                        if (currentCharacterCoordinates.isNotEmpty() && timeSinceLastUp > NEW_CHARACTER_THRESHOLD) {
+                            mSegmentedCharactersCoordinates.add(currentCharacterCoordinates) // Add the completed character
+                            currentCharacterCoordinates = mutableListOf() // Start new character buffer
+                            Log.d("DrawingView", "New character started after a ${timeSinceLastUp}ms gap.")
+                        }
+
+                        mDrawPath = CustomPath(color, mBrushSize)
+                        mDrawPath!!.color = color
+                        mDrawPath!!.brushThickness = mBrushSize
+                        mDrawPath!!.reset()
+                        mDrawPath!!.moveTo(touchX, touchY)
+
+                        mDrawPath!!.coordinates.add(Triple(touchX.toInt(), touchY.toInt(), 1)) // 1 for pen down
+                        currentCharacterCoordinates.add(Triple(touchX.toInt(), touchY.toInt(), 1))
+                    }
+                    DrawingMode.SQUARE -> {
+                        startSquareX = touchX
+                        startSquareY = touchY
+                        currentSquare = RectF(startSquareX, startSquareY, startSquareX, startSquareY)
+                    }
                 }
-                // If currentCharacterCoordinates is empty, it's either the very first stroke or
-                // getSegmentedCharactersCoordinates() has already moved the last character to segments.
-                // In these cases, we simply continue/start the currentCharacterCoordinates.
-
-
-                mDrawPath = CustomPath(color, mBrushSize) // Always create a new path for a new stroke
-                mDrawPath!!.color = color
-                mDrawPath!!.brushThickness = mBrushSize
-                mDrawPath!!.reset()
-                mDrawPath!!.moveTo(touchX.toFloat(), touchY.toFloat())
-
-                mDrawPath!!.coordinates.add(Triple(touchX, touchY, 1)) // 1 for pen down
-                currentCharacterCoordinates.add(Triple(touchX, touchY, 1))
             }
             MotionEvent.ACTION_MOVE -> {
-                mDrawPath!!.lineTo(touchX.toFloat(), touchY.toFloat())
-                mDrawPath!!.coordinates.add(Triple(touchX, touchY, 1)) // 1 for pen move
-                currentCharacterCoordinates.add(Triple(touchX, touchY, 1))
+                when (currentDrawingMode) {
+                    DrawingMode.FREEHAND -> {
+                        mDrawPath!!.lineTo(touchX, touchY)
+                        mDrawPath!!.coordinates.add(Triple(touchX.toInt(), touchY.toInt(), 1)) // 1 for pen move
+                        currentCharacterCoordinates.add(Triple(touchX.toInt(), touchY.toInt(), 1))
+                    }
+                    DrawingMode.SQUARE -> {
+                        currentSquare?.set(
+                            minOf(startSquareX, touchX),
+                            minOf(startSquareY, touchY),
+                            maxOf(startSquareX, touchX),
+                            maxOf(startSquareY, touchY)
+                        )
+                    }
+                }
             }
             MotionEvent.ACTION_UP -> {
-                mDrawPath!!.coordinates.add(Triple(touchX, touchY, 0)) // 0 for pen up
-                mPaths.add(mDrawPath!!) // Add the completed stroke to mPaths
-                currentCharacterCoordinates.add(Triple(touchX, touchY, 0)) // Add to current char buffer
+                when (currentDrawingMode) {
+                    DrawingMode.FREEHAND -> {
+                        mDrawPath!!.coordinates.add(Triple(touchX.toInt(), touchY.toInt(), 0)) // 0 for pen up
+                        mPaths.add(mDrawPath!!) // Add the completed stroke to mPaths
+                        currentCharacterCoordinates.add(Triple(touchX.toInt(), touchY.toInt(), 0)) // Add to current char buffer
 
-                updateAllCoordinates() // If you still use this, ensure it's here
-                Log.d("DrawingView", "Updated allCoordinates: $allCoordinates")
+                        updateAllCoordinates()
+                        Log.d("DrawingView", "Updated allCoordinates: $allCoordinates")
 
-                lastActionUpTime = System.currentTimeMillis() // NEW: Record the time of ACTION_UP
-                mDrawPath = CustomPath(color, mBrushSize) // Reset mDrawPath for the next stroke
+                        lastActionUpTime = System.currentTimeMillis() // Record the time of ACTION_UP
+                        mDrawPath = CustomPath(color, mBrushSize)
+                    }
+                    DrawingMode.SQUARE -> {
+                        currentSquare?.let {
+                            // Ensure the square has valid dimensions
+                            if (it.width() > 0 && it.height() > 0) {
+                                mPredictedSquares.add(PredictedSquare(RectF(it))) // Add a copy
+                                Log.d("DrawingView", "Square drawn: $it")
+                                // Automatically predict when a square is drawn
+                                predictCharacterInSquare(it)
+                            }
+                        }
+                        currentSquare = null // Clear the current square in progress
+                    }
+                }
             }
         }
         invalidate()
@@ -191,7 +274,6 @@ class DrawingView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         mDrawPaint!!.strokeWidth = mBrushSize
     }
 
-    // Set color method
     fun setColor(currentColor: String) {
         color = currentColor.toColorInt()
         mDrawPaint!!.color = color
@@ -202,18 +284,66 @@ class DrawingView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         return allCoordinates
     }
 
-    // Get the segmented characters' coordinates
     fun getSegmentedCharactersCoordinates(): List<List<Triple<Int, Int, Int>>> {
-        // If there are any un-added strokes for the current character when this is called (e.g., predict button pressed),
-        // add them to the segmented list. This ensures the last drawn character is also included.
         if (currentCharacterCoordinates.isNotEmpty()) {
-            // Make a defensive copy to prevent concurrent modification issues
-            // if drawing continues while prediction is happening.
             mSegmentedCharactersCoordinates.add(currentCharacterCoordinates.toMutableList())
-            currentCharacterCoordinates.clear() // Clear for next drawing session
+            currentCharacterCoordinates.clear()
         }
         return mSegmentedCharactersCoordinates
     }
+
+    // NEW: Function to set the drawing mode
+    fun setDrawingMode(mode: DrawingMode) {
+        currentDrawingMode = mode
+        Log.d("DrawingView", "Drawing mode set to: $currentDrawingMode")
+        Toast.makeText(context, "Drawing Mode: $currentDrawingMode", Toast.LENGTH_SHORT).show()
+    }
+
+    // NEW: Function to extract and predict character within a given square
+    private fun predictCharacterInSquare(squareRect: RectF) {
+        val characterPointsInSquare = mutableListOf<Triple<Int, Int, Int>>()
+
+        // Iterate through all drawn paths (strokes)
+        for (path in mPaths) {
+            // Iterate through all points in the current path
+            for (pointTriple in path.coordinates) {
+                val x = pointTriple.first.toFloat()
+                val y = pointTriple.second.toFloat()
+                val penState = pointTriple.third
+
+                // Check if the point is within the square
+                if (squareRect.contains(x, y)) {
+                    characterPointsInSquare.add(Triple(x.toInt(), y.toInt(), penState))
+                }
+            }
+        }
+
+        if (characterPointsInSquare.isNotEmpty()) {
+            val predictedFeatures = getProcessedFeaturesForCharacter(characterPointsInSquare)
+            Log.d("DrawingView", "Features for square prediction: $predictedFeatures")
+
+            val squareToUpdate = mPredictedSquares.find { it.rect == squareRect }
+            squareToUpdate?.predictedChar = "Predicting..." // Initial state
+
+            // Trigger actual prediction (Requires access to CharacterViewModel)
+            onPredictCharacterInSquare?.invoke(squareRect, predictedFeatures)
+
+        } else {
+            val squareToUpdate = mPredictedSquares.find { it.rect == squareRect }
+            squareToUpdate?.predictedChar = "No Char"
+            Log.d("DrawingView", "No character points found within the drawn square.")
+        }
+        invalidate() // Redraw to show "Predicting..." or "No Char"
+    }
+
+    fun updatePredictedCharacter(squareRect: RectF, predictedChar: String) {
+        val squareToUpdate = mPredictedSquares.find { it.rect == squareRect }
+        if (squareToUpdate != null) {
+            squareToUpdate.predictedChar = predictedChar
+            invalidate() // Redraw to show the actual prediction
+        }
+    }
+
 
     fun getBitmap(currentBackgroundColor: androidx.compose.ui.graphics.Color): Bitmap {
         val bitmap = createBitmap(width, height)

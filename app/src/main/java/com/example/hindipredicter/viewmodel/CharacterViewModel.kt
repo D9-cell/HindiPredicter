@@ -5,13 +5,20 @@ import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
-import com.example.hindipredicter.ai.TFLiteClassifierHindi // Corrected import
+import com.example.hindipredicter.ai.TFLiteClassifierHindi
+import android.graphics.RectF // Import RectF
 
 class CharacterViewModel(application: Application) : AndroidViewModel(application) {
 
-    // NEW: _predictionResult now holds a list of strings for multiple predictions
+    // For multi-character prediction (time-based segmentation)
     private val _predictionResult = mutableStateOf<List<String>?>(null)
     val predictionResult: State<List<String>?> = _predictionResult
+
+    // NEW: For single-character prediction (square-based)
+    // Stores a Pair of (RectF, PredictedCharacterString)
+    private val _singleCharPredictionResult = mutableStateOf<Pair<RectF, String>?>(null)
+    val singleCharPredictionResult: State<Pair<RectF, String>?> = _singleCharPredictionResult
+
 
     private val classifier = TFLiteClassifierHindi(application.applicationContext)
 
@@ -21,24 +28,24 @@ class CharacterViewModel(application: Application) : AndroidViewModel(applicatio
         try {
             val predictedIndex = classifier.predict(features)
             val labelClasses = listOf(
-                "A/अ/অ", "AA/आ/আ", "ADA/ढ़/ঢ", "AN/ं/ং",
+                "A/अ/অ", "AA/आ/আ", "ADA/ढ़/ঢ", "AN/ং/ং",
                 "BA/ब/ব", "BHA/भ/ভ", "BI/ः/ঃ",
-                "C/च/চ", "CH/ছ/ছ", "CN/ँ/ঁ",
-                "DA/द/द", "DDA/ड/ड", "DDH/ढ/ঢ", "DHA/ध/ध", "DRA/ड़/ড়",
+                "C/চ/চ", "CH/ছ/ছ", "CN/ँ/ঁ",
+                "DA/द/द", "DDA/ड/ड", "DDH/ढ/ঢ", "DHA/ध/ধ", "DRA/ड़/ড়",
                 "E/ए/এ", "EN/ञ/ঞ",
-                "G/ग/ग", "GH/ঘ/ঘ",
+                "G/ग/গ", "GH/ঘ/ঘ",
                 "HA/ह/ह",
                 "I/इ/इ", "II/ई/ঈ",
-                "JA/ज/ज", "JH/झ/ঝ",
-                "K/क/क", "KH/ख/খ", "KT/त্/ৎ",
-                "LA/ल/ল",
-                "MA/म/म", "MN/ण/ण", "MSA/ष/ष",
-                "NA/न/न",
+                "JA/ज/জ", "JH/झ/ঝ",
+                "K/क/क", "KH/ख/ख", "KT/त্/ৎ",
+                "LA/ল/ল",
+                "MA/ম/ম", "MN/ण/ণ", "MSA/ষ/ষ",
+                "NA/ন/ন",
                 "O/ओ/ओ", "OI/ऐ/ঐ", "OU/औ/ঔ",
-                "PA/प/প", "PHA/ফ/ফ",
+                "PA/প/প", "PHA/ফ/ফ",
                 "RA/র/র", "RI/ऋ/ঋ",
                 "S/स/स", "SA/শ/শ",
-                "T/ट/ट", "TA/ত/ত", "THA/थ/थ", "TTA/ঠ/ঠ",
+                "T/ट/ट", "TA/त/त", "THA/थ/थ", "TTA/ঠ/ঠ",
                 "U/उ/उ", "UN/ङ/ঙ", "UU/ऊ/ঊ",
                 "Y/य़/য়", "YA/य/য"
             )
@@ -58,25 +65,25 @@ class CharacterViewModel(application: Application) : AndroidViewModel(applicatio
     fun predictMultipleCharacters(charactersFeatures: List<List<Double>>) {
         val predictedCharacters = mutableListOf<String>()
         val labelClasses = listOf(
-            "A/अ/অ", "AA/आ/আ", "ADA/ढ़/ঢ়", "AN/ं/ং",
+            "A/अ/অ", "AA/आ/आ", "ADA/ढ़/ঢ়", "AN/ं/ং",
             "BA/ब/ব", "BHA/भ/ভ", "BI/ः/ঃ",
-            "C/च/চ", "CH/छ/ছ", "CN/ँ/ঁ",
-            "DA/द/দ", "DDA/ड/ড", "DDH/ढ/ঢ", "DHA/ध/ধ", "DRA/ड़/ড়",
+            "C/च/চ", "CH/ছ/ছ", "CN/ँ/ঁ",
+            "DA/द/द", "DDA/ड/ड", "DDH/ढ/ঢ", "DHA/ध/ध", "DRA/ड़/ड़",
             "E/ए/এ", "EN/ञ/ঞ",
-            "G/ग/গ", "GH/घ/ঘ",
-            "HA/ह/হ",
-            "I/इ/ই", "II/ई/ঈ",
-            "JA/ज/জ", "JH/झ/ঝ",
-            "K/क/ক", "KH/ख/খ", "KT/त्/ৎ",
-            "LA/ल/ল",
-            "MA/म/ম", "MN/ण/ণ","MSA/ष/ষ",
-            "NA/न/ন",
-            "O/ओ/ও", "OI/ऐ/ঐ", "OU/औ/ঔ",
-            "PA/प/প", "PHA/फ/ফ",
-            "RA/र/র", "RI/ऋ/ঋ",
-            "S/स/স", "SA/श/শ",
-            "T/ट/ট", "TA/त/ত", "THA/थ/থ", "TTA/ठ/ঠ",
-            "U/उ/উ", "UN/ङ/ঙ", "UU/ऊ/ঊ",
+            "G/ग/ग", "GH/घ/घ",
+            "HA/ह/ह",
+            "I/इ/इ", "II/ई/ঈ",
+            "JA/ज/ज", "JH/झ/झ",
+            "K/क/क", "KH/ख/ख", "KT/त्/ৎ",
+            "LA/ল/ল",
+            "MA/ম/ম", "MN/ণ/ণ","MSA/ष/ষ",
+            "NA/ন/ন",
+            "O/ओ/ओ", "OI/ऐ/ঐ", "OU/औ/ঔ",
+            "PA/प/प", "PHA/ফ/ফ",
+            "RA/র/র", "RI/ऋ/ঋ",
+            "S/स/स", "SA/শ/শ",
+            "T/ट/ट", "TA/त/त", "THA/थ/थ", "TTA/ঠ/ঠ",
+            "U/उ/उ", "UN/ङ/ঙ", "UU/ऊ/ঊ",
             "Y/य़/য়", "YA/य/য"
         )
         for (features in charactersFeatures) {
@@ -94,8 +101,48 @@ class CharacterViewModel(application: Application) : AndroidViewModel(applicatio
         _predictionResult.value = predictedCharacters // Update with all predictions
     }
 
+    // NEW: Function to predict a single character based on square selection
+    fun predictSingleCharacterForSquare(rect: RectF, features: List<Double>) {
+        try {
+            val predictedIndex = classifier.predict(features)
+            val labelClasses = listOf(
+                "A/अ/অ", "AA/आ/आ", "ADA/ढ़/ঢ়", "AN/ं/ং",
+                "BA/ब/ব", "BHA/भ/ভ", "BI/ः/ঃ",
+                "C/च/च", "CH/ছ/ছ", "CN/ँ/ঁ",
+                "DA/द/द", "DDA/ड/ड", "DDH/ढ/ঢ", "DHA/ध/ध", "DRA/ड़/ड़",
+                "E/ए/এ", "EN/ञ/ঞ",
+                "G/ग/ग", "GH/ঘ/घ",
+                "HA/ह/ह",
+                "I/इ/इ", "II/ई/ई",
+                "JA/ज/ज", "JH/झ/झ",
+                "K/क/क", "KH/ख/ख", "KT/त्/ৎ",
+                "LA/ল/ল",
+                "MA/ম/ম", "MN/ণ/ণ","MSA/ষ/ষ",
+                "NA/ন/ন",
+                "O/ओ/ओ", "OI/ऐ/ঐ", "OU/औ/ঔ",
+                "PA/প/प", "PHA/ফ/ফ",
+                "RA/র/র", "RI/ऋ/ঋ",
+                "S/स/स", "SA/শ/শ",
+                "T/ट/ट", "TA/ত/ত", "THA/थ/থ", "TTA/ঠ/ঠ",
+                "U/उ/उ", "UN/ङ/ঙ", "UU/ऊ/ঊ",
+                "Y/य़/য়", "YA/य/য"
+            )
+            val predictedChar = labelClasses[predictedIndex]
+            Log.d("CharacterViewModel", "Single Character Prediction for Square: $predictedChar")
+            _singleCharPredictionResult.value = Pair(rect, predictedChar)
+        } catch (e: Exception) {
+            Log.e("CharacterViewModel", "Single Character Prediction failed for square: ${e.message}")
+            _singleCharPredictionResult.value = Pair(rect, "Error")
+        }
+    }
+
 
     fun clearPrediction() {
         _predictionResult.value = null // Clears the list of results
+    }
+
+    // NEW: Clear single char prediction result
+    fun clearSingleCharPrediction() {
+        _singleCharPredictionResult.value = null
     }
 }
